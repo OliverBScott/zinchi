@@ -1,0 +1,17 @@
+[package]
+name = "zinchi"
+version = "0.1.0"
+edition = "2021"
+authors = ["Oliver Scott"]
+description = "A compact binary representation for InChI Keys, reducing their size from 27 bytes to 9-14 bytes"
+license = "MIT"
+repository = "https://github.com/OliverBScott/zinchi"
+homepage = "https://github.com/OliverBScott/zinchi"
+documentation = "https://docs.rs/zinchi"
+readme = "README.md"
+keywords = ["inchi", "chemistry", "compression", "cheminformatics"]
+categories = ["science", "compression", "encoding"]
+rust-version = "1.75"
+
+[dev-dependencies]
+rand = "0.9"
