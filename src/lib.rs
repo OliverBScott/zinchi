@@ -629,7 +629,6 @@ mod tests {
     #[cfg(feature = "serde")]
     mod serde_tests {
         use super::*;
-        use bincode;
 
         #[test]
         fn serde_bincode_binary_roundtrip_short_and_long() {
