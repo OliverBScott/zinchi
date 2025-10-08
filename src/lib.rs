@@ -31,6 +31,7 @@
 //! assert_eq!(key, unpacked);
 //! ```
 
+use std::error::Error;
 use std::fmt::{Display, Formatter, Write};
 use std::str::FromStr;
 
@@ -58,6 +59,20 @@ pub enum InChIKeyParseError {
     /// The protonation flag is invalid (expected 'N' or 'A'-'Z').
     InvalidProtonation,
 }
+
+impl Display for InChIKeyParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InChIKeyParseError::InvalidCharacter => write!(f, "invalid character in InChIKey"),
+            InChIKeyParseError::InvalidLength => write!(f, "invalid InChIKey length"),
+            InChIKeyParseError::InvalidFlag => write!(f, "invalid standard/non-standard flag"),
+            InChIKeyParseError::InvalidVersion => write!(f, "invalid InChI version"),
+            InChIKeyParseError::InvalidProtonation => write!(f, "invalid protonation flag"),
+        }
+    }
+}
+
+impl Error for InChIKeyParseError {}
 
 /// A compact binary representation of an InChI key.
 ///
@@ -138,6 +153,10 @@ impl InChIKey {
     /// ```
     pub fn pack_into<B: AsMut<[u8]>>(&self, buffer: &mut B) -> usize {
         let buf = buffer.as_mut();
+        assert!(
+            buf.len() >= 14,
+            "pack_into buffer must be at least 14 bytes"
+        );
         buf[..9].copy_from_slice(&self.fst);
         buf[8] |= (self.chg.wrapping_sub(b'A')) << 2;
         if self.get_packed_size() == 9 {
@@ -199,9 +218,9 @@ impl InChIKey {
     /// let unpacked = InChIKey::unpack_from(&packed).unwrap();
     /// assert_eq!(key, unpacked);
     /// ```
-    pub fn unpack_from<B: AsRef<[u8]>>(buffer: &B) -> Result<Self, InChIKeyParseError> {
+    pub fn unpack_from<B: AsRef<[u8]> + ?Sized>(buffer: &B) -> Result<Self, InChIKeyParseError> {
         let buf = buffer.as_ref();
-        if buf.len() < 9 {
+        if !(buf.len() == 9 || buf.len() == 14) {
             return Err(InChIKeyParseError::InvalidLength);
         }
         let mut fst = [0u8; 9];
@@ -273,6 +292,90 @@ impl Display for InChIKey {
         f.write_char('-')?;
         f.write_char(self.chg as char)?;
         Ok(())
+    }
+}
+
+#[cfg(feature = "serde")]
+mod serde_impl {
+    use super::{InChIKey, InChIKeyParseError};
+    use serde::de::{self, Visitor};
+    use serde::ser::Serializer;
+
+    impl serde::Serialize for InChIKey {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            if serializer.is_human_readable() {
+                serializer.collect_str(self)
+            } else {
+                let bytes = self.packed_bytes();
+                serializer.serialize_bytes(&bytes)
+            }
+        }
+    }
+
+    struct InChIKeyVisitor;
+
+    impl<'de> Visitor<'de> for InChIKeyVisitor {
+        type Value = InChIKey;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(formatter, "an InChIKey string or packed InChIKey bytes")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            v.parse()
+                .map_err(|e: InChIKeyParseError| de::Error::custom(e.to_string()))
+        }
+
+        fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            self.visit_str(v)
+        }
+
+        fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            InChIKey::unpack_from(v)
+                .map_err(|e: InChIKeyParseError| de::Error::custom(e.to_string()))
+        }
+
+        fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            self.visit_bytes(&v)
+        }
+    }
+
+    impl<'de> serde::Deserialize<'de> for InChIKey {
+        fn deserialize<D>(deserializer: D) -> Result<InChIKey, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            if deserializer.is_human_readable() {
+                deserializer.deserialize_str(InChIKeyVisitor)
+            } else {
+                deserializer.deserialize_bytes(InChIKeyVisitor)
+            }
+        }
+    }
+
+    impl serde::Serialize for InChIKeyParseError {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let s = format!("{}", self);
+            serializer.serialize_str(&s)
+        }
     }
 }
 
@@ -520,6 +623,33 @@ mod tests {
             let unpacked = InChIKey::unpack_from(&packed).expect("Unpack failed");
             let s2 = unpacked.to_string();
             assert_eq!(s, s2, "Roundtrip mismatch: {} -> {}", s, s2);
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    mod serde_tests {
+        use super::*;
+        use bincode;
+
+        #[test]
+        fn serde_bincode_binary_roundtrip_short_and_long() {
+            // short/packable key
+            let k1: InChIKey = "ZZZXOYCAMOTTNS-UHFFFAOYSA-N".parse().unwrap();
+            let ser1 = bincode::serde::encode_to_vec(&k1, bincode::config::standard())
+                .expect("bincode encode_to_vec failed");
+            let (de1, _): (InChIKey, usize) =
+                bincode::serde::decode_from_slice(&ser1, bincode::config::standard())
+                    .expect("bincode decode_from_slice failed");
+            assert_eq!(k1, de1);
+
+            // long/full key (non-UHFFFAOYSA)
+            let k2: InChIKey = "ZZJLMZYUGLJBSO-LAEOZQHASA-N".parse().unwrap();
+            let ser2 = bincode::serde::encode_to_vec(&k2, bincode::config::standard())
+                .expect("bincode encode_to_vec failed");
+            let (de2, _): (InChIKey, usize) =
+                bincode::serde::decode_from_slice(&ser2, bincode::config::standard())
+                    .expect("bincode decode_from_slice failed");
+            assert_eq!(k2, de2);
         }
     }
 }

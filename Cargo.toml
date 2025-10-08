@@ -13,5 +13,13 @@ keywords = ["inchi", "chemistry", "compression", "cheminformatics"]
 categories = ["science", "compression", "encoding"]
 rust-version = "1.75"
 
+[dependencies]
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]
+
 [dev-dependencies]
 rand = "0.9"
+bincode = { version = "2", features = ["serde"] }
