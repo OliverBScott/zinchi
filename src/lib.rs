@@ -19,7 +19,7 @@
 //!
 //! Standard InChI keys with the common second block `UHFFFAOYSA` can be packed into just 9 bytes.
 //! All other InChI keys require 14 bytes.
-//! 
+//!
 //! # Optional Features
 //!
 //! - **`serde`**: Enable serialization/deserialization support. When enabled, `InChIKey` serializes
