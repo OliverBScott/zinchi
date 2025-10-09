@@ -26,7 +26,6 @@
 //!   as a string in human-readable formats (JSON, YAML) and uses the compact binary representation
 //!   in binary formats (bincode, MessagePack).
 //!
-//!
 //! # Example
 //!
 //! ```rust

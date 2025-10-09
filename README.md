@@ -84,7 +84,7 @@ An InChI key has the format: `AAAAAAAAAAAAAA-BBBBBBBBFV-P`
 
 Standard InChI keys with the common second block `UHFFFAOYSA` (empty stereochemistry hash) are packed into just **9 bytes**. All other InChI keys require **14 bytes**.
 
-This represents a **67-75% reduction** in size compared to the ASCII representation.
+This represents a **48-66% reduction** in size compared to the ASCII representation.
 
 ### Encoding Details
 

@@ -1,6 +1,6 @@
 [package]
 name = "zinchi"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Oliver Scott"]
 description = "A compact binary representation for InChI Keys, reducing their size from 27 bytes to 9-14 bytes"
