@@ -19,6 +19,13 @@
 //!
 //! Standard InChI keys with the common second block `UHFFFAOYSA` can be packed into just 9 bytes.
 //! All other InChI keys require 14 bytes.
+//! 
+//! # Optional Features
+//!
+//! - **`serde`**: Enable serialization/deserialization support. When enabled, `InChIKey` serializes
+//!   as a string in human-readable formats (JSON, YAML) and uses the compact binary representation
+//!   in binary formats (bincode, MessagePack).
+//!
 //!
 //! # Example
 //!
@@ -599,14 +606,14 @@ mod tests {
         fn arbitrary(g: &mut Gen) -> Self {
             let mut fst = [0u8; 9];
             let mut snd = [0u8; 5];
-            for i in 0..9 {
-                fst[i] = *g.choose(&(0..=255).collect::<Vec<_>>()).unwrap();
+            for byte in &mut fst {
+                *byte = *g.choose(&(0..=255).collect::<Vec<_>>()).unwrap();
             }
-            fst[8] &= 0x01; // Only bit 0 is used (the e-bit)
-            for i in 0..5 {
-                snd[i] = *g.choose(&(0..=255).collect::<Vec<_>>()).unwrap();
+            fst[8] &= 0x01; // only bit 0 is used (the e-bit)
+            for byte in &mut snd {
+                *byte = *g.choose(&(0..=255).collect::<Vec<_>>()).unwrap();
             }
-            snd[4] &= 0x1F; // Only bits 0-4 are used
+            snd[4] &= 0x1F; // only bits 0-4 are used
             let std = *g.choose(&[true, false]).unwrap();
             let chg = if *g.choose(&[true, false]).unwrap() {
                 b'N'
