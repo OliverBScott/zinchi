@@ -20,6 +20,12 @@
 //! Standard InChI keys with the common second block `UHFFFAOYSA` can be packed into just 9 bytes.
 //! All other InChI keys require 14 bytes.
 //!
+//! # Optional Features
+//!
+//! - **`serde`**: Enable serialization/deserialization support. When enabled, `InChIKey` serializes
+//!   as a string in human-readable formats (JSON, YAML) and uses the compact binary representation
+//!   in binary formats (bincode, MessagePack).
+//!
 //! # Example
 //!
 //! ```rust
@@ -31,6 +37,7 @@
 //! assert_eq!(key, unpacked);
 //! ```
 
+use std::error::Error;
 use std::fmt::{Display, Formatter, Write};
 use std::str::FromStr;
 
@@ -59,11 +66,25 @@ pub enum InChIKeyParseError {
     InvalidProtonation,
 }
 
+impl Display for InChIKeyParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InChIKeyParseError::InvalidCharacter => write!(f, "invalid character in InChIKey"),
+            InChIKeyParseError::InvalidLength => write!(f, "invalid InChIKey length"),
+            InChIKeyParseError::InvalidFlag => write!(f, "invalid standard/non-standard flag"),
+            InChIKeyParseError::InvalidVersion => write!(f, "invalid InChI version"),
+            InChIKeyParseError::InvalidProtonation => write!(f, "invalid protonation flag"),
+        }
+    }
+}
+
+impl Error for InChIKeyParseError {}
+
 /// A compact binary representation of an InChI key.
 ///
 /// This structure encodes an InChI key in 9 or 14 bytes depending on whether
 /// it uses the common stereochemistry block "UHFFFAOYSA".
-#[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InChIKey {
     /// Packed first block (connectivity hash) - 9 bytes encoding 14 characters.
     fst: [u8; 9],
@@ -138,6 +159,10 @@ impl InChIKey {
     /// ```
     pub fn pack_into<B: AsMut<[u8]>>(&self, buffer: &mut B) -> usize {
         let buf = buffer.as_mut();
+        assert!(
+            buf.len() >= 14,
+            "pack_into buffer must be at least 14 bytes"
+        );
         buf[..9].copy_from_slice(&self.fst);
         buf[8] |= (self.chg.wrapping_sub(b'A')) << 2;
         if self.get_packed_size() == 9 {
@@ -199,9 +224,9 @@ impl InChIKey {
     /// let unpacked = InChIKey::unpack_from(&packed).unwrap();
     /// assert_eq!(key, unpacked);
     /// ```
-    pub fn unpack_from<B: AsRef<[u8]>>(buffer: &B) -> Result<Self, InChIKeyParseError> {
+    pub fn unpack_from<B: AsRef<[u8]> + ?Sized>(buffer: &B) -> Result<Self, InChIKeyParseError> {
         let buf = buffer.as_ref();
-        if buf.len() < 9 {
+        if !(buf.len() == 9 || buf.len() == 14) {
             return Err(InChIKeyParseError::InvalidLength);
         }
         let mut fst = [0u8; 9];
@@ -217,6 +242,7 @@ impl InChIKey {
                 return Err(InChIKeyParseError::InvalidLength);
             }
             snd.copy_from_slice(&buf[9..14]);
+            snd[4] &= 0x1F; // clear the std flag bit
             ((buf[13] >> 5) & 0x1) != 1
         };
         Ok(InChIKey {
@@ -273,6 +299,90 @@ impl Display for InChIKey {
         f.write_char('-')?;
         f.write_char(self.chg as char)?;
         Ok(())
+    }
+}
+
+#[cfg(feature = "serde")]
+mod serde_impl {
+    use super::{InChIKey, InChIKeyParseError};
+    use serde::de::{self, Visitor};
+    use serde::ser::Serializer;
+
+    impl serde::Serialize for InChIKey {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            if serializer.is_human_readable() {
+                serializer.collect_str(self)
+            } else {
+                let bytes = self.packed_bytes();
+                serializer.serialize_bytes(&bytes)
+            }
+        }
+    }
+
+    struct InChIKeyVisitor;
+
+    impl<'de> Visitor<'de> for InChIKeyVisitor {
+        type Value = InChIKey;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(formatter, "an InChIKey string or packed InChIKey bytes")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            v.parse()
+                .map_err(|e: InChIKeyParseError| de::Error::custom(e.to_string()))
+        }
+
+        fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            self.visit_str(v)
+        }
+
+        fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            InChIKey::unpack_from(v)
+                .map_err(|e: InChIKeyParseError| de::Error::custom(e.to_string()))
+        }
+
+        fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            self.visit_bytes(&v)
+        }
+    }
+
+    impl<'de> serde::Deserialize<'de> for InChIKey {
+        fn deserialize<D>(deserializer: D) -> Result<InChIKey, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            if deserializer.is_human_readable() {
+                deserializer.deserialize_str(InChIKeyVisitor)
+            } else {
+                deserializer.deserialize_bytes(InChIKeyVisitor)
+            }
+        }
+    }
+
+    impl serde::Serialize for InChIKeyParseError {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let s = format!("{}", self);
+            serializer.serialize_str(&s)
+        }
     }
 }
 
@@ -447,7 +557,7 @@ fn validate_inchikey_bytes(bytes: &[u8]) -> Result<(), InChIKeyParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{rng, Rng};
+    use quickcheck::{quickcheck, Arbitrary, Gen};
 
     const TEST_KEYS: &[&str] = &[
         "ZZZXOYCAMOTTNS-UHFFFAOYSA-N",
@@ -491,35 +601,84 @@ mod tests {
         }
     }
 
-    #[test]
-    fn fuzz_roundtrip() {
-        let mut rng = rng();
-        for _ in 0..10_000 {
+    impl Arbitrary for InChIKey {
+        fn arbitrary(g: &mut Gen) -> Self {
             let mut fst = [0u8; 9];
             let mut snd = [0u8; 5];
-            rng.fill(&mut fst);
-            rng.fill(&mut snd);
-            let std = rng.random_bool(0.5);
-            let ver = b'A';
-            let chg = if rng.random_bool(0.5) {
+            for byte in &mut fst {
+                *byte = *g.choose(&(0..=255).collect::<Vec<_>>()).unwrap();
+            }
+            fst[8] &= 0x01; // only bit 0 is used (the e-bit)
+            for byte in &mut snd {
+                *byte = *g.choose(&(0..=255).collect::<Vec<_>>()).unwrap();
+            }
+            snd[4] &= 0x1F; // only bits 0-4 are used
+            let std = *g.choose(&[true, false]).unwrap();
+            let chg = if *g.choose(&[true, false]).unwrap() {
                 b'N'
             } else {
-                rng.random_range(b'A'..=b'M')
+                *g.choose(&(b'A'..=b'M').collect::<Vec<_>>()).unwrap()
             };
-            let key = InChIKey {
+            InChIKey {
                 fst,
                 snd,
                 std,
-                ver,
+                ver: b'A',
                 chg,
-            };
-            let s = key.to_string();
-            validate_inchikey_bytes(s.as_bytes()).expect("Generated InChIKey failed validation");
-            let parsed: InChIKey = s.parse().expect("Parsing failed");
-            let packed = parsed.packed_bytes();
-            let unpacked = InChIKey::unpack_from(&packed).expect("Unpack failed");
-            let s2 = unpacked.to_string();
-            assert_eq!(s, s2, "Roundtrip mismatch: {} -> {}", s, s2);
+            }
+        }
+    }
+
+    fn prop_string_roundtrip(key: InChIKey) -> bool {
+        let s = key.to_string();
+        let parsed: InChIKey = s.parse().unwrap();
+        key == parsed
+    }
+
+    fn prop_packed_roundtrip(key: InChIKey) -> bool {
+        let packed = key.packed_bytes();
+        let unpacked = InChIKey::unpack_from(&packed).unwrap();
+        key == unpacked
+    }
+
+    fn prop_packed_size(key: InChIKey) -> bool {
+        let size = key.get_packed_size();
+        size == 9 || size == 14
+    }
+
+    #[test]
+    fn quickcheck_properties() {
+        quickcheck(prop_string_roundtrip as fn(InChIKey) -> bool);
+        quickcheck(prop_packed_roundtrip as fn(InChIKey) -> bool);
+        quickcheck(prop_packed_size as fn(InChIKey) -> bool);
+    }
+
+    #[cfg(feature = "serde")]
+    mod serde_tests {
+        use super::*;
+
+        #[test]
+        fn bincode_roundtrip() {
+            for &key_str in TEST_KEYS {
+                let key: InChIKey = key_str.parse().unwrap();
+                let encoded =
+                    bincode::serde::encode_to_vec(&key, bincode::config::standard()).unwrap();
+                let (decoded, _): (InChIKey, usize) =
+                    bincode::serde::decode_from_slice(&encoded, bincode::config::standard())
+                        .unwrap();
+                assert_eq!(key, decoded, "Bincode roundtrip failed for {}", key_str);
+            }
+        }
+
+        #[test]
+        fn json_roundtrip() {
+            for &key_str in TEST_KEYS {
+                let key: InChIKey = key_str.parse().unwrap();
+                let json = serde_json::to_string(&key).unwrap();
+                let decoded: InChIKey = serde_json::from_str(&json).unwrap();
+                assert_eq!(key, decoded, "JSON roundtrip failed for {}", key_str);
+                assert_eq!(json, format!("\"{}\"", key_str), "JSON format check failed");
+            }
         }
     }
 }

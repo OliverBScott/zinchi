@@ -1,6 +1,6 @@
 [package]
 name = "zinchi"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Oliver Scott"]
 description = "A compact binary representation for InChI Keys, reducing their size from 27 bytes to 9-14 bytes"
@@ -13,5 +13,14 @@ keywords = ["inchi", "chemistry", "compression", "cheminformatics"]
 categories = ["science", "compression", "encoding"]
 rust-version = "1.75"
 
+[dependencies]
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]
+
 [dev-dependencies]
-rand = "0.9"
+quickcheck = "1.0"
+serde_json = "1.0"
+bincode = { version = "2", features = ["serde"] }

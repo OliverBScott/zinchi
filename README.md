@@ -84,11 +84,33 @@ An InChI key has the format: `AAAAAAAAAAAAAA-BBBBBBBBFV-P`
 
 Standard InChI keys with the common second block `UHFFFAOYSA` (empty stereochemistry hash) are packed into just **9 bytes**. All other InChI keys require **14 bytes**.
 
-This represents a **67-75% reduction** in size compared to the ASCII representation.
+This represents a **48-66% reduction** in size compared to the ASCII representation.
 
 ### Encoding Details
 
 The first block (14 characters) is decoded into four 14-bit triples and one 9-bit pair, then packed into 9 bytes. The second block (8 characters) is decoded into two 14-bit triples and one 9-bit pair, then packed into 5 bytes. Additional metadata (standard flag, version, protonation) is encoded into spare bits.
+
+## Serde Support
+
+When the `serde` feature is enabled, `InChIKey` implements `Serialize` and `Deserialize`:
+
+```rust
+use zinchi::InChIKey;
+
+let key: InChIKey = "ZZJLMZYUGLJBSO-UHFFFAOYSA-N".parse()?;
+
+// JSON serialization (human-readable)
+let json = serde_json::to_string(&key)?;
+assert_eq!(json, "\"ZZJLMZYUGLJBSO-UHFFFAOYSA-N\"");
+
+// Binary serialization with bincode (compact)
+let bytes = bincode::serde::encode_to_vec(&key, bincode::config::standard())?;
+// Uses the 9 or 14 byte packed representation
+```
+
+The serialization format automatically adapts:
+- **Human-readable formats** (JSON, YAML, etc.): Serializes as an InChIKey string
+- **Binary formats** (bincode, etc.): Serializes using the compact 9 or 14 byte representation
 
 ## Contributing
 

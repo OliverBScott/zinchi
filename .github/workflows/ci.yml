@@ -50,10 +50,10 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
       
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --all-features --verbose
       
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --all-features --verbose
       
       - name: Run doc tests
         run: cargo test --doc --verbose
@@ -96,7 +96,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       
       - name: Check documentation
-        run: cargo doc --no-deps --document-private-items
+        run: cargo doc --no-deps --all-features --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
 
