@@ -631,7 +631,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn serde_bincode_binary_roundtrip_short_and_long() {
+        fn serde_bincode_binary_roundtrip() {
             // short/packable key
             let k1: InChIKey = "ZZZXOYCAMOTTNS-UHFFFAOYSA-N".parse().unwrap();
             let ser1 = bincode::serde::encode_to_vec(&k1, bincode::config::standard())
@@ -649,6 +649,25 @@ mod tests {
                 bincode::serde::decode_from_slice(&ser2, bincode::config::standard())
                     .expect("bincode decode_from_slice failed");
             assert_eq!(k2, de2);
+        }
+
+        #[test]
+        fn serde_json_roundtrip() {
+            // test JSON serialization/deserialization
+            let k1: InChIKey = "ZZZXOYCAMOTTNS-UHFFFAOYSA-N".parse().unwrap();
+            let json = serde_json::to_string(&k1).expect("JSON serialization failed");
+            let de1: InChIKey = serde_json::from_str(&json).expect("JSON deserialization failed");
+            assert_eq!(k1, de1);
+
+            // verify it's human-readable (string format)
+            assert_eq!(json, "\"ZZZXOYCAMOTTNS-UHFFFAOYSA-N\"");
+
+            // test with non-standard key
+            let k2: InChIKey = "ZZJLMZYUGLJBSO-LAEOZQHASA-N".parse().unwrap();
+            let json2 = serde_json::to_string(&k2).expect("JSON serialization failed");
+            let de2: InChIKey = serde_json::from_str(&json2).expect("JSON deserialization failed");
+            assert_eq!(k2, de2);
+            assert_eq!(json2, "\"ZZJLMZYUGLJBSO-LAEOZQHASA-N\"");
         }
     }
 }
