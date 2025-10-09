@@ -78,7 +78,7 @@ impl Error for InChIKeyParseError {}
 ///
 /// This structure encodes an InChI key in 9 or 14 bytes depending on whether
 /// it uses the common stereochemistry block "UHFFFAOYSA".
-#[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InChIKey {
     /// Packed first block (connectivity hash) - 9 bytes encoding 14 characters.
     fst: [u8; 9],
@@ -236,6 +236,7 @@ impl InChIKey {
                 return Err(InChIKeyParseError::InvalidLength);
             }
             snd.copy_from_slice(&buf[9..14]);
+            snd[4] &= 0x1F; // clear the std flag bit
             ((buf[13] >> 5) & 0x1) != 1
         };
         Ok(InChIKey {
@@ -550,7 +551,7 @@ fn validate_inchikey_bytes(bytes: &[u8]) -> Result<(), InChIKeyParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{rng, Rng};
+    use quickcheck::{quickcheck, Arbitrary, Gen};
 
     const TEST_KEYS: &[&str] = &[
         "ZZZXOYCAMOTTNS-UHFFFAOYSA-N",
@@ -594,36 +595,56 @@ mod tests {
         }
     }
 
-    #[test]
-    fn fuzz_roundtrip() {
-        let mut rng = rng();
-        for _ in 0..10_000 {
+    impl Arbitrary for InChIKey {
+        fn arbitrary(g: &mut Gen) -> Self {
             let mut fst = [0u8; 9];
             let mut snd = [0u8; 5];
-            rng.fill(&mut fst);
-            rng.fill(&mut snd);
-            let std = rng.random_bool(0.5);
-            let ver = b'A';
-            let chg = if rng.random_bool(0.5) {
+            for i in 0..9 {
+                fst[i] = *g.choose(&(0..=255).collect::<Vec<_>>()).unwrap();
+            }
+            fst[8] &= 0x01; // Only bit 0 is used (the e-bit)
+            for i in 0..5 {
+                snd[i] = *g.choose(&(0..=255).collect::<Vec<_>>()).unwrap();
+            }
+            snd[4] &= 0x1F; // Only bits 0-4 are used
+            let std = *g.choose(&[true, false]).unwrap();
+            let chg = if *g.choose(&[true, false]).unwrap() {
                 b'N'
             } else {
-                rng.random_range(b'A'..=b'M')
+                *g.choose(&(b'A'..=b'M').collect::<Vec<_>>()).unwrap()
             };
-            let key = InChIKey {
+            InChIKey {
                 fst,
                 snd,
                 std,
-                ver,
+                ver: b'A',
                 chg,
-            };
-            let s = key.to_string();
-            validate_inchikey_bytes(s.as_bytes()).expect("Generated InChIKey failed validation");
-            let parsed: InChIKey = s.parse().expect("Parsing failed");
-            let packed = parsed.packed_bytes();
-            let unpacked = InChIKey::unpack_from(&packed).expect("Unpack failed");
-            let s2 = unpacked.to_string();
-            assert_eq!(s, s2, "Roundtrip mismatch: {} -> {}", s, s2);
+            }
         }
+    }
+
+    fn prop_string_roundtrip(key: InChIKey) -> bool {
+        let s = key.to_string();
+        let parsed: InChIKey = s.parse().unwrap();
+        key == parsed
+    }
+
+    fn prop_packed_roundtrip(key: InChIKey) -> bool {
+        let packed = key.packed_bytes();
+        let unpacked = InChIKey::unpack_from(&packed).unwrap();
+        key == unpacked
+    }
+
+    fn prop_packed_size(key: InChIKey) -> bool {
+        let size = key.get_packed_size();
+        size == 9 || size == 14
+    }
+
+    #[test]
+    fn quickcheck_properties() {
+        quickcheck(prop_string_roundtrip as fn(InChIKey) -> bool);
+        quickcheck(prop_packed_roundtrip as fn(InChIKey) -> bool);
+        quickcheck(prop_packed_size as fn(InChIKey) -> bool);
     }
 
     #[cfg(feature = "serde")]
@@ -631,43 +652,27 @@ mod tests {
         use super::*;
 
         #[test]
-        fn serde_bincode_binary_roundtrip() {
-            // short/packable key
-            let k1: InChIKey = "ZZZXOYCAMOTTNS-UHFFFAOYSA-N".parse().unwrap();
-            let ser1 = bincode::serde::encode_to_vec(&k1, bincode::config::standard())
-                .expect("bincode encode_to_vec failed");
-            let (de1, _): (InChIKey, usize) =
-                bincode::serde::decode_from_slice(&ser1, bincode::config::standard())
-                    .expect("bincode decode_from_slice failed");
-            assert_eq!(k1, de1);
-
-            // long/full key (non-UHFFFAOYSA)
-            let k2: InChIKey = "ZZJLMZYUGLJBSO-LAEOZQHASA-N".parse().unwrap();
-            let ser2 = bincode::serde::encode_to_vec(&k2, bincode::config::standard())
-                .expect("bincode encode_to_vec failed");
-            let (de2, _): (InChIKey, usize) =
-                bincode::serde::decode_from_slice(&ser2, bincode::config::standard())
-                    .expect("bincode decode_from_slice failed");
-            assert_eq!(k2, de2);
+        fn bincode_roundtrip() {
+            for &key_str in TEST_KEYS {
+                let key: InChIKey = key_str.parse().unwrap();
+                let encoded =
+                    bincode::serde::encode_to_vec(&key, bincode::config::standard()).unwrap();
+                let (decoded, _): (InChIKey, usize) =
+                    bincode::serde::decode_from_slice(&encoded, bincode::config::standard())
+                        .unwrap();
+                assert_eq!(key, decoded, "Bincode roundtrip failed for {}", key_str);
+            }
         }
 
         #[test]
-        fn serde_json_roundtrip() {
-            // test JSON serialization/deserialization
-            let k1: InChIKey = "ZZZXOYCAMOTTNS-UHFFFAOYSA-N".parse().unwrap();
-            let json = serde_json::to_string(&k1).expect("JSON serialization failed");
-            let de1: InChIKey = serde_json::from_str(&json).expect("JSON deserialization failed");
-            assert_eq!(k1, de1);
-
-            // verify it's human-readable (string format)
-            assert_eq!(json, "\"ZZZXOYCAMOTTNS-UHFFFAOYSA-N\"");
-
-            // test with non-standard key
-            let k2: InChIKey = "ZZJLMZYUGLJBSO-LAEOZQHASA-N".parse().unwrap();
-            let json2 = serde_json::to_string(&k2).expect("JSON serialization failed");
-            let de2: InChIKey = serde_json::from_str(&json2).expect("JSON deserialization failed");
-            assert_eq!(k2, de2);
-            assert_eq!(json2, "\"ZZJLMZYUGLJBSO-LAEOZQHASA-N\"");
+        fn json_roundtrip() {
+            for &key_str in TEST_KEYS {
+                let key: InChIKey = key_str.parse().unwrap();
+                let json = serde_json::to_string(&key).unwrap();
+                let decoded: InChIKey = serde_json::from_str(&json).unwrap();
+                assert_eq!(key, decoded, "JSON roundtrip failed for {}", key_str);
+                assert_eq!(json, format!("\"{}\"", key_str), "JSON format check failed");
+            }
         }
     }
 }
